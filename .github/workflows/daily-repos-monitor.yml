@@ -1,0 +1,67 @@
+name: Daily Repos Monitor
+
+on:
+  schedule:
+    - cron: '0 7 * * *'  # Daily at 07:00 UTC (08:00 CET)
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  check-repos:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Fetch current repositories
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "Fetching repositories for Mar2rech..."
+          gh api --paginate /users/Mar2rech/repos --jq '.[].full_name' | sort > current_repos.txt
+          echo "Current repositories:"
+          cat current_repos.txt
+
+      - name: Compare and log changes
+        run: |
+          DATE=$(date -u +"%Y-%m-%d %H:%M:%S UTC")
+          if [ -f previous_repos.txt ]; then
+            echo "Comparing with previous snapshot..."
+            comm -13 previous_repos.txt current_repos.txt > new_repos.txt || true
+            comm -23 previous_repos.txt current_repos.txt > removed_repos.txt || true
+            
+            CHANGES=""
+            if [ -s new_repos.txt ]; then
+              CHANGES+="### New repositories:\n$(cat new_repos.txt | sed 's/^/- /')\n\n"
+            fi
+            if [ -s removed_repos.txt ]; then
+              CHANGES+="### Removed repositories:\n$(cat removed_repos.txt | sed 's/^/- /')\n\n"
+            fi
+            
+            if [ -n "$CHANGES" ]; then
+              echo -e "\n## Changes on $DATE\n\n$CHANGES" >> CHANGES.md
+              echo "Changes detected and logged."
+            else
+              echo "No changes in repository list."
+              echo -e "\n## No changes on $DATE" >> CHANGES.md
+            fi
+          else
+            echo "No previous snapshot. Creating baseline."
+            echo -e "\n## Baseline snapshot on $DATE\n\n$(cat current_repos.txt | sed 's/^/- /')\n" >> CHANGES.md
+          fi
+          
+          cp current_repos.txt previous_repos.txt
+
+      - name: Commit and push changes
+        run: |
+          git config --local user.email "github-actions[bot]@users.noreply.github.com"
+          git config --local user.name "github-actions[bot]"
+          git add CHANGES.md previous_repos.txt || true
+          if git diff --staged --quiet; then
+            echo "No changes to commit."
+          else
+            git commit -m "Update repository changes log [skip ci]"
+            git push
+          fi
